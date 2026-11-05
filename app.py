@@ -621,6 +621,25 @@ def _aba_id_from_name(name: str) -> str:
     return (slug or "aba")[:60]
 
 
+def _chave_ordem(item: dict) -> str:
+    """Chave alfabética (sem acento/caixa) — mesma ordem da planilha."""
+    import unicodedata
+
+    desc = unicodedata.normalize("NFKD", str(item.get("descricao") or ""))
+    desc = "".join(c for c in desc if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", desc).strip().lower()
+
+
+def _inserir_em_ordem(lista: list, item: dict) -> None:
+    """Insere o item na posição alfabética, sem mexer na ordem dos demais."""
+    chave = _chave_ordem(item)
+    for i, old in enumerate(lista):
+        if _chave_ordem(old) > chave:
+            lista.insert(i, item)
+            return
+    lista.append(item)
+
+
 def _parse_pedido_sheet(name: str, rows: list) -> dict | None:
     """Lê uma aba (colunas A–E) e devolve meta + itens, ou None se inválida."""
     if (name or "").upper() == "ESTOQUE":
@@ -1709,7 +1728,7 @@ def api_catalogo_item():
             replaced = True
             break
     if not replaced:
-        lista.append(item)
+        _inserir_em_ordem(lista, item)
 
     for a in catalogo["abas"]:
         if a["id"] == aba_id:
@@ -1727,6 +1746,27 @@ def api_catalogo_item():
             "total_aba": len(lista),
         }
     )
+
+
+@app.route("/api/catalogo/ordenar", methods=["POST"])
+@login_required
+def api_catalogo_ordenar():
+    """Reordena alfabeticamente os itens de cada categoria (ordem da planilha)."""
+    data = request.get_json(silent=True) or request.form
+    uid = resolve_unidade(data.get("unidade"))
+    catalogo = load_catalogo(uid)
+    itens = catalogo.get("itens") or {}
+    total = 0
+    for aid, lista in itens.items():
+        if isinstance(lista, list):
+            lista.sort(key=_chave_ordem)
+            total += len(lista)
+    try:
+        save_catalogo(catalogo, uid)
+    except Exception as e:
+        return jsonify({"ok": False, "erro": str(e)}), 500
+    _catalogo_cache.clear()
+    return jsonify({"ok": True, "itens": total})
 
 
 @app.route("/importar/estoque", methods=["POST"])
@@ -1917,20 +1957,25 @@ def api_parametros():
         "caixa_com": caixa,
     }
 
-    # Remove da aba antiga
     origem = catalogo["itens"].get(found_aba_id, []) or []
-    if found_idx is not None and 0 <= found_idx < len(origem):
-        origem.pop(found_idx)
-    catalogo["itens"][found_aba_id] = origem
+    if not aba_mudou and found_idx is not None and 0 <= found_idx < len(origem):
+        # Mesma aba: atualiza no lugar (mantém a ordem da planilha)
+        origem[found_idx] = novo_item
+        catalogo["itens"][found_aba_id] = origem
+    else:
+        # Remove da aba antiga
+        if found_idx is not None and 0 <= found_idx < len(origem):
+            origem.pop(found_idx)
+        catalogo["itens"][found_aba_id] = origem
 
-    # Garante aba destino
-    if dest_aba_id not in catalogo["itens"]:
-        catalogo["itens"][dest_aba_id] = []
-        catalogo["abas"].append(
-            {"id": dest_aba_id, "titulo": aba_titulo, "count": 0}
-        )
+        # Garante aba destino
+        if dest_aba_id not in catalogo["itens"]:
+            catalogo["itens"][dest_aba_id] = []
+            catalogo["abas"].append(
+                {"id": dest_aba_id, "titulo": aba_titulo, "count": 0}
+            )
 
-    catalogo["itens"][dest_aba_id].append(novo_item)
+        _inserir_em_ordem(catalogo["itens"][dest_aba_id], novo_item)
 
     # Atualiza títulos/contagens e remove abas vazias
     vivos = []

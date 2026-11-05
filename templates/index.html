@@ -20,6 +20,35 @@
     <a class="btn btn-primary" href="#secaoNovoPedido" id="btnCriarNovoPedido">Criar novo pedido</a>
     <button type="button" class="btn" id="btnAddMedicamentoMenu">+ Adicionar medicamento</button>
     <a class="btn" href="#secaoMedicamentos" id="btnVerMedicamentos">Ver lista</a>
+    {% if tem_catalogo %}
+    <button
+      type="button"
+      class="btn"
+      id="btnOrdenarCatalogo"
+      data-unidade="{{ unidade_id }}"
+      title="Reorganiza a lista em ordem alfabética (como na planilha)"
+    >Ordenar A–Z</button>
+    <script>
+      document.getElementById("btnOrdenarCatalogo").addEventListener("click", async (ev) => {
+        const btn = ev.currentTarget;
+        if (!confirm("Reorganizar a lista de medicamentos em ordem alfabética?")) return;
+        btn.disabled = true;
+        try {
+          const r = await fetch("/api/catalogo/ordenar", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ unidade: btn.dataset.unidade }),
+          });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.erro || "Falha ao ordenar.");
+          location.reload();
+        } catch (e) {
+          alert(e.message);
+          btn.disabled = false;
+        }
+      });
+    </script>
+    {% endif %}
   </div>
 {% endblock %}
 
